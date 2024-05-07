@@ -1,0 +1,2 @@
+class sluggardException(Exception):
+  pass

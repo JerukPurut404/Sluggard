@@ -1,7 +1,14 @@
 import requests
+import json
+from .user import User
+from .exceptions import sluggardException
+from .utils import get_value_deep_key
 
 class Sluggard:
-    def __init__(self, csrf_token, cookies):
+    loads = json.loads
+    dumps = json.dumps
+    def __init__(self, csrf_token="", cookies=""):
+        self.last_response = {}
         self.url = "https://api.simulise.com/graphql"
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:124.0) Gecko/20100101 Firefox/124.0",
@@ -11,64 +18,38 @@ class Sluggard:
             "Content-Disposition": None,
             "x-csrf-token": csrf_token,
             "x-requested-with": "XMLHttpRequest",
-            "Cookie": cookies
+            "Cookie": cookies,
+            "DNT": "1"
         }
+
+        self.session = requests.Session()
+        
 
     def debug_mode(self, input):
         data = {"query": input}
-        response = requests.post(self.url, headers=self.headers, json=data)
+        response = self.session.post(self.url, headers=self.headers, json=data)
         response_json = response.json()
-        return response_json
+        return Sluggard.loads()
         
 
     def school_name_search(self, name):
         data = {"query":"query authenticationRealmSearch($query: String!) {\n  authenticationRealmSearch(query: $query) {\n    ...authenticationRealmFields\n    __typename\n  }\n}\n\nfragment authenticationRealmFields on AuthenticationRealm {\n  id\n  key\n  sso\n  idp {\n    name\n    logo\n    __typename\n  }\n  logo\n  name\n  i18n {\n    lang\n    type\n    __typename\n  }\n  alias\n  permalink\n  __typename\n}", "variables":{"query":name}}
         try:
-            response = requests.post(self.url, json=data)
+            response = self.session.post(self.url, json=data)
             return response.text
         except requests.exceptions.RequestException as e:
-            return f"An error occurred: {e}"
+            raise sluggardException("Request failed") from e
     
     def discover_user(self, user):
         data = {"query": f"query dashboardDiscoverUser($id: String!) {{ user(id: $id) {{ id username primaryRole groupsActive {{ ...dashboardUserTileGroupsFragment __typename }} dashboardTiles {{ id key title isHidden canBeHidden __typename }} __typename }} viewer {{ id tenant {{ id settings {{ goalsLargerOnDashboard __typename }} __typename }} username primaryRole groupsActive {{ ...dashboardUserTileGroupsFragment __typename }} externalInvitationCount __typename }} }} fragment dashboardUserTileGroupsFragment on Group {{ __typename ... on Entity {{ id __typename }} ... on WorkGroup {{ id name icon permalink __typename }} ... on SchoolGroup {{ id name icon path permalink __typename }} ... on VirtualGroup {{ id name icon permalink __typename }} }}" , "variables": {"id": user}}
         try:
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             response_json = response.json()
-            
-            discover_data = {
-                'id': response_json['data']['user']['id'],
-                'username': response_json['data']['user']['username'],
-                'primary_role': response_json['data']['user']['primaryRole'],
-            }
 
-            groups_active_data = []
-            for group in response_json['data']['user']['groupsActive']:
-                group_data = {
-                    'id': group['id'],
-                    'name': group['name'],
-                    'typename': group['__typename'],
-                    'icon': group['icon'],
-                    'path': group['path'],
-                    'link': group['permalink']
-                }
-                groups_active_data.append(group_data)
-
-            dashboard_tiles_data = []
-            for dashboard in response_json['data']['user']['dashboardTiles']:
-                dashboard_data = {
-                    'id': dashboard['id'],
-                    'key': dashboard['key'],
-                    'title': dashboard['title'],
-                    'isHidden': dashboard['isHidden'],
-                    'canBeHidden': dashboard['canBeHidden']
-                }
-                dashboard_tiles_data.append(dashboard_data)
-
-            discover_data['groups_active'] = groups_active_data
-            discover_data['dashboardTiles'] = dashboard_tiles_data
-            return discover_data
+            return User.discover_from_dict(response_json)
         except requests.exceptions.RequestException as e:
-            return f"An error occurred: {e}"
+            raise sluggardException("Request failed") from e
+
 
     def get_portfolio_items(self, user):
         try:
@@ -76,33 +57,13 @@ class Sluggard:
                 "query": "query dashboardTilePortfolioItems($id: String!) {\n  dashboard: user(id: $id) {\n    id\n    portfolioItems(first: 5) {\n      data {\n        id\n        icon\n        title\n        author {\n          id\n          name\n          __typename\n        }\n        permalink\n        createdAt\n        __typename\n      }\n      paginatorInfo {\n        total\n        __typename\n      }\n      __typename\n    }\n    portfolioPermalink\n    __typename\n  }\n}",
                 "variables": {"id": user}
             }
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             response_json = response.json()
-
-            portfolio_items = []
-            for portfolio in response_json['data']['dashboard']['portfolioItems']['data']:
-                portfolio_data = {
-                    'id': portfolio['id'],
-                    'icon': portfolio['icon'],
-                    'title': portfolio['title'],
-                    'link': portfolio['permalink'],
-                    'creation_date': portfolio['createdAt'],
-                    'authors': []
-                }
-                portfolio_items.append(portfolio_data)
-               
-            authors_items = []
-            for portfolio in response_json['data']['dashboard']['portfolioItems']['data']:
-                author_data = {
-                    'id': portfolio['author']['id'],
-                    'name': portfolio['author']['name']
-                }
-                authors_items.append(author_data)
-            
-            portfolio_data['authors'] = authors_items
-            return portfolio_items
+    
+            return User.portfolio_from_dict(response_json)
         except requests.exceptions.RequestException as e:
             return f"An error occurred: {e}"
+
 
     def user_info(self, user_id):
         try:
@@ -111,7 +72,7 @@ class Sluggard:
                 "variables": {"id": user_id, "lookingAtOwnProfile": False, "viewingExternal": False}
             }
             
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             response_json = response.json()
             user_data = response_json.get('data', {}).get('dashboard', {})
             
@@ -120,22 +81,24 @@ class Sluggard:
                 'avatar': user_data.get('avatar', ''),
                 'name': user_data.get('name', ''),
                 'about': user_data.get('about', ''),
-                'avatar': user_data.get('avatar', ''),
                 'username': user_data.get('username', ''),
                 'primary_role': user_data.get('primaryRole', ''),
                 'render_label': user_data.get('renderedLabel', ''),
                 'canBeImposter': user_data.get('canBeImpersonated', '')
             }
             
-            return user_info
+            return User.info_from_dict(user_info)
         except requests.exceptions.RequestException as e:
             return f"An error occurred: {e}"
 
 
+    # def user_assignments(self, user_id, page=int):
+    #     data = {"query": "query userAssignedAssignments($userId: String!, $page: Int!, $filters: [String!]!, $orderBy: UserAssignedAssignmentsOrder) {\n result: user(id: $userId) {\n id\n ...userAssignmentsAssignedContainer\n __typename\n }\n}\n\nfragment userAssignmentsAssignedContainer on User {\n assignmentsAssignedContainer(page: $page, filters: $filters, orderBy: $orderBy) {\n data {\n __typename\n ... on AssignedAssignment {\n id\n plan {\n id\n title\n __typen…\n totalDeliverables\n deliveredDeliverables\n assignedAssignmentPlan {\n id\n permalink\n __typename\n }\n __typename\n }\n __typename\n }\n }\n paginatorInfo {\n ...paginatorFieldsFragment\n __typename\n }\n __typename\n }\n __typename\n}\n\nfragment paginatorFieldsFragment on PaginatorInfo {\n total\n lastPage\n lastItem\n firstItem\n currentPage\n hasMorePages\n __typename\n}", {"variables": {"page": page, "orderBy":{"field": "TITLE", "direction": "ASC"}}}}
+    
     def unread_notification(self):
         data = {"query":"subscription listenForUnreadNotificationChanges {\n  count: notificationsUnreadCount\n}"}
         try:
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             return response.json()
         except requests.exceptions.RequestException as e:
             return f"An error occurred: {e}"
@@ -143,7 +106,7 @@ class Sluggard:
     def get_portfolio_banner(self):
         data = {"query": "query getPortfolioBannerForSettings {\n viewer {\n id\n portfolioBanner {\n ...portfolioBannerFields\n __typename\n }\n __typename\n }\n staticPortfolioBanners {\n ...staticPortfolioBannerFields\n __typename\n }\n}\n\nfragment portfolioBannerFields on PortfolioBanner {\n ... on MedialibraryFile {\n id\n url\n __typename\n }\n ... on StaticPortfolioBanner {\n ...staticPortfolioBannerFields\n __typename\n }\n __typename\n}\n\nfragment staticPortfolioBannerFields on StaticPortfolioBanner {\n key\n url\n name\n group\n __typename\n}"}
         try:
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             response_json = response.json()
 
             banner_info = {
@@ -169,7 +132,7 @@ class Sluggard:
     def get_unsplash_banner(self, query, first=int, page=int):
         data = {"query": "query medialibraryPagedUnsplashImages($query: String, $first: Int!, $page: Int!) {\n unsplashImages: medialibraryUnsplashSearch(\n query: $query\n first: $first\n page: $page\n ) {\n data {\n id\n user {\n id\n name\n permalink\n __typename\n }\n title\n preview\n blurHash\n permalink\n createdAt\n aspectRatio\n description\n downloadUrl\n __typename\n }\n paginatorInfo {\n hasMorePages\n __typename\n }\n __typename\n }\n}", "variables": {"page": page, "first": first, "query":query}}
         try: 
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             response_json = response.json()
             
             unsplash_info = {
@@ -200,7 +163,7 @@ class Sluggard:
     def add_banner_from_unsplash(self, picture_id):
         data = {"query": "mutation medialibraryImportFromUnsplash($input: MedialibraryImportFromUnsplashInput!) {\n response: medialibraryImportFromUnsplash(input: $input) {\n file {\n ...medialibraryFilesFileFieldsFragment\n __typename\n }\n ...mutationFields\n __typename\n }\n}\n\nfragment medialibraryFilesFileFieldsFragment on MedialibraryFile {\n id\n size\n type\n icon\n title\n uploader {\n id\n name\n permalink\n __typename\n }\n extension\n createdAt\n thumbnail\n downloadUrl\n canBeEdited\n canBeDeleted\n thumbnailBlurHash\n renderedPreviewUrl\n __typename\n}\n\nfragment mutationFields on MutationPayload {\n status {\n success\n errors {\n name\n messages\n __typename\n }\n __typename\n }\n __typename\n}", "variables": {"input": {"id": picture_id, "context": "USER"}}}
         try:
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             response_json = response.json()
 
             banner_info = {
@@ -215,7 +178,7 @@ class Sluggard:
     def get_banner_library(self, first=20, page=1, query=""):
         data = {"query": "query medialibraryPagedFiles($context: MedialibraryContext, $query: String, $types: [MedialibraryFileType!], $first: Int!, $page: Int!) {\n medialibraryFiles(\n context: $context\n query: $query\n types: $types\n first: $first\n page: $page\n ) {\n data {\n ...medialibraryFilesFileFieldsFragment\n __typename\n }\n paginatorInfo {\n hasMorePages\n __typename\n }\n __typename\n }\n}\n\nfragment medialibraryFilesFileFieldsFragment on MedialibraryFile {\n id\n size\n type\n icon\n title\n uploader {\n id\n name\n permalink\n __typename\n }\n extension\n createdAt\n thumbnail\n downloadUrl\n canBeEdited\n canBeDeleted\n thumbnailBlurHash\n renderedPreviewUrl\n __typename\n}", "variables": {"page":page, "first": first, "query": query, "types":["IMAGE"], "context": "USER"}}
         try:
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             response_json = response.json()
 
             library_info = {
@@ -249,7 +212,7 @@ class Sluggard:
             "variables": {"input": {"id": image_id, "context": "USER"}}
         }
         try:
-            response = requests.post(self.url, headers=self.headers, json=data)
+            response = self.session.post(self.url, headers=self.headers, json=data)
             response_json = response.json()
             response_data = response_json.get('data', {})
             response_status = response_data.get('response', {}).get('status', {})
@@ -288,7 +251,7 @@ class Sluggard:
     #     }
 
     #     # Send the request
-    #     response = requests.post(self.url, headers=self.headers, files=files)
+    #     response = self.session.post(self.url, headers=self.headers, files=files)
     #     print(files)
 
     #     # Ensure the file is closed after the request
